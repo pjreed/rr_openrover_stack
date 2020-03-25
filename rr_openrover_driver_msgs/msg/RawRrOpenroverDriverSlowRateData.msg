@@ -1,4 +1,4 @@
-Header header
+std_msgs/Header header
 int32 reg_motor_fault_flag_left
 int32 reg_motor_temp_left
 int32 reg_motor_temp_right

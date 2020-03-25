@@ -4,7 +4,8 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
-#include "ros/ros.h"
+#include <rclcpp/logging.hpp>
+#include <rclcpp/time.hpp>
 
 #include <rr_openrover_driver/odom_control.hpp>
 #include <rr_openrover_driver/constants.hpp>
@@ -18,7 +19,7 @@ void OdomControl::start(bool use_control, PidGains pid_gains, int max, int min)
   K_D_ = pid_gains.Kd;
 }
 
-OdomControl::OdomControl()
+OdomControl::OdomControl(rclcpp::Node::SharedPtr node)
   : MOTOR_MAX_(MOTOR_SPEED_MAX)
   , MOTOR_MIN_(MOTOR_SPEED_MIN)
   , MOTOR_DEADBAND_(9)
@@ -42,13 +43,15 @@ OdomControl::OdomControl()
   , velocity_commanded_(0)
   , velocity_measured_(0)
   , velocity_filtered_(0)
+  , node_(node)
 {
-  ROS_INFO("odom Kp: %f", K_P_);
-  ROS_INFO("odom Ki: %f", K_I_);
-  ROS_INFO("odom Kd: %f", K_D_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kp: %f", K_P_);
+  RCLCPP_INFO(node_->get_logger(), "odom Ki: %f", K_I_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kd: %f", K_D_);
 }
 
-OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min, std::ofstream* fs)
+OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min, std::ofstream* fs,
+                         rclcpp::Node::SharedPtr node)
   : MOTOR_MAX_(max)
   , MOTOR_MIN_(min)
   , MOTOR_DEADBAND_(9)
@@ -72,10 +75,11 @@ OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min,
   , velocity_commanded_(0)
   , velocity_measured_(0)
   , velocity_filtered_(0)
+  , node_(node)
 {
-  ROS_INFO("odom Kp: %f", K_P_);
-  ROS_INFO("odom Ki: %f", K_I_);
-  ROS_INFO("odom Kd: %f", K_D_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kp: %f", K_P_);
+  RCLCPP_INFO(node_->get_logger(), "odom Ki: %f", K_I_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kd: %f", K_D_);
 
   if (fs_ != nullptr && fs_->is_open()) {
     *fs_ << "time,Kp,Ki,Kd,error,integral_error,differential_error,error_filtered,meas_vel,filt_vel,cmd_vel,dt,motor_cmd\n";
@@ -83,7 +87,8 @@ OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min,
   }
 }
 
-OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min)
+OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min,
+                         rclcpp::Node::SharedPtr node)
   : MOTOR_MAX_(max)
   , MOTOR_MIN_(min)
   , MOTOR_DEADBAND_(9)
@@ -107,10 +112,11 @@ OdomControl::OdomControl(bool use_control, PidGains pid_gains, int max, int min)
   , velocity_commanded_(0)
   , velocity_measured_(0)
   , velocity_filtered_(0)
+  , node_(node)
 {
-  ROS_INFO("odom Kp: %f", K_P_);
-  ROS_INFO("odom Ki: %f", K_I_);
-  ROS_INFO("odom Kd: %f", K_D_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kp: %f", K_P_);
+  RCLCPP_INFO(node_->get_logger(), "odom Ki: %f", K_I_);
+  RCLCPP_INFO(node_->get_logger(), "odom Kd: %f", K_D_);
 }
 
 unsigned char OdomControl::run(bool e_stop_on, bool control_on, double commanded_vel, double measured_vel, double dt)
@@ -145,7 +151,7 @@ unsigned char OdomControl::run(bool e_stop_on, bool control_on, double commanded
     if (!skip_measurement_)
     {
       motor_speed_ = PID(velocity_error_, dt);
-      ROS_DEBUG("PID: %i", motor_speed_);
+      RCLCPP_DEBUG(node_->get_logger(), "PID: %i", motor_speed_);
     }
   }
   else
@@ -155,8 +161,8 @@ unsigned char OdomControl::run(bool e_stop_on, bool control_on, double commanded
 
   motor_speed_ = boundMotorSpeed(motor_speed_, MOTOR_MAX_, MOTOR_MIN_);
 
-  if (fs_ != nullptr && fs_->is_open()){
-    *fs_ << ros::Time::now() << ",";
+  if (fs_ != nullptr && fs_->is_open()) {
+    *fs_ << node_->now().seconds() << ",";
     *fs_ << K_P_ << "," << K_I_ << "," << K_D_ << ",";
     *fs_ << commanded_vel - measured_vel << "," << integral_error_ << "," << differential_error_<< "," << velocity_error_ << ",";
     *fs_ << measured_vel << "," << velocity_filtered_ << "," << commanded_vel << ",";
@@ -190,8 +196,8 @@ int OdomControl::PID(double error, double dt)
   double i_val = I(error, dt);
   double d_val = D(error, dt);
   double pid_val = p_val + i_val + d_val;
-  ROS_DEBUG("\nerror: %lf\n dt: %lf", error, dt);
-  ROS_DEBUG("\n kp: %lf \n ki: %lf \n kd: %lf \n", p_val, i_val, d_val);
+  RCLCPP_DEBUG(node_->get_logger(), "\nerror: %lf\n dt: %lf", error, dt);
+  RCLCPP_DEBUG(node_->get_logger(), "\n kp: %lf \n ki: %lf \n kd: %lf \n", p_val, i_val, d_val);
 
   if (fabs(pid_val) > (MOTOR_MAX_/2.0))
     //Only integrate if the motor's aren't already at full speed

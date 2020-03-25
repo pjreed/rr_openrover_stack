@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from __future__ import division
 
 # Author: Nick Fragale
@@ -14,335 +14,326 @@ from __future__ import division
 
 import time
 
-import rospy
+import rclpy
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from actionlib_msgs.msg import GoalID
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool
 from std_msgs.msg import Float32, String
-import rosnode
-
-rospy.init_node('xbox_mapper_node', anonymous=True)
-
-cmd = TwistStamped()
-seq = 0
-last_a_button = time.time()
-last_b_button = time.time()
-last_x_button = time.time()
-last_y_button = time.time()
-last_joycb_device_check = time.time()
-button_msg = String()
-
-# difference between xboxdrv USB driver and xpad.ko kernel module
-# 1) xboxdrv has only 11 indices
-# 2) U/D_PAD_BUTTON is the 7th axis
-# 3) xpad module uses 2, xboxdrv uses 3
-driver = rospy.get_param('/xbox_mapper_node/driver', 'xboxdrv')
-wired_or_wireless = rospy.get_param('/xbox_mapper_node/wired_or_wireless', 'wireless')
-
-if driver == 'xpad':
-    rospy.logfatal('[{node_name}] xpad driver not supported.'.format(node_name=rospy.get_name()))
-    rospy.signal_shutdown('xpad driver not supported.')
-    exit(-1)
-
-elif wired_or_wireless == 'wired' and driver == 'xboxdrv':
-    rospy.loginfo('XBOX CONFIG: wired & xboxdrv')
-    rospy.logwarn('If the wired controller becomes unplugged during operation '
-                  'xboxdrv may continue to publish the last command from the '
-                  'controller, causing the vehicle to run away.')
-
-elif wired_or_wireless == 'wireless' and driver == 'xboxdrv':
-    rospy.loginfo('XBOX CONFIG: wireless & xboxdrv')
-
-else:
-    rospy.logfatal('Unsupported controller configuration: {driver}, {connection}'
-                   .format(driver=driver, connection=wired_or_wireless))
-    rospy.signal_shutdown('Unsupported controller configuration.')
-    exit(-1)
-
-L_STICK_H_AXES = 0
-L_STICK_V_AXES = 1
-L_TRIG_AXES = 5
-R_STICK_H_AXES = 2
-R_STICK_V_AXES = 3
-R_TRIG_AXES = 4
-DPAD_H_AXES = 6
-DPAD_V_AXES = 7
-
-A_BUTTON = 0
-B_BUTTON = 1
-X_BUTTON = 2
-Y_BUTTON = 3
-LB_BUTTON = 4
-RB_BUTTON = 5
-BACK_BUTTON = 6
-START_BUTTON = 7
-POWER_BUTTON = 8
-L_STICK_BUTTON = 9
-R_STICK_BUTTON = 10
-
-prev_fwd = 0
-prev_trn = 0
-
-PREV_CMD_TIME = 0
-PREV_SEQ_NUM = 0
-
-MAX_VEL_FWD = rospy.get_param('~max_vel_drive', 2.6)
-MAX_VEL_TURN = rospy.get_param('~max_vel_turn', 9.0)
-MAX_VEL_FLIPPER = rospy.get_param('~max_vel_flipper', 1.4)
-DRIVE_THROTTLE = rospy.get_param('~default_drive_throttle', 0.15)
-FLIPPER_THROTTLE = rospy.get_param('~default_flipper_throttle', 0.6)
-ADJ_THROTTLE = rospy.get_param('~adjustable_throttle', True)
-A_BUTTON_TOGGLE = rospy.get_param('~a_button_toggle', False)
-B_BUTTON_TOGGLE = rospy.get_param('~b_button_toggle', False)
-X_BUTTON_TOGGLE = rospy.get_param('~x_button_toggle', False)
-Y_BUTTON_TOGGLE = rospy.get_param('~y_button_toggle', False)
-MIN_TOGGLE_DUR = 0.5  #
-DRIVE_INCREMENTS = float(20)
-FLIPPER_INCREMENTS = float(20)
-DEADBAND = 0.2
-FWD_ACC_LIM = 0.2
-TRN_ACC_LIM = 0.4
-DPAD_ACTIVE = False
-
-a_button_msg = Bool()
-a_button_msg.data = False
-b_button_msg = Bool()
-b_button_msg.data = False
-x_button_msg = Bool()
-x_button_msg.data = False
-y_button_msg = Bool()
-y_button_msg.data = False
-
-# define publishers  
-pub = rospy.Publisher('/cmd_vel/joystick', TwistStamped, queue_size=3)
-a_button_pub = rospy.Publisher('/joystick/a_button', Bool, queue_size=1, latch=True)
-b_button_pub = rospy.Publisher('/joystick/b_button', Bool, queue_size=1, latch=True)
-x_button_pub = rospy.Publisher('/joystick/x_button', Bool, queue_size=1, latch=True)
-y_button_pub = rospy.Publisher('/joystick/y_button', Bool, queue_size=1, latch=True)
-pub_delay = rospy.Publisher('/joystick/delay', Float32, queue_size=3)
-pub_cancel_move_base = rospy.Publisher('/move_base/cancel', GoalID, queue_size=10)
+import sys
 
 
-def limit_acc(fwd, trn):
-    # TODO calculate delta t and times acc limits by that so that acc_limits are correct units
-    global prev_fwd, prev_trn
-
-    fwd_acc = fwd - prev_fwd
-    if fwd_acc > FWD_ACC_LIM:
-        fwd = prev_fwd + FWD_ACC_LIM
-    elif fwd_acc < -FWD_ACC_LIM:
-        fwd = prev_fwd - FWD_ACC_LIM
-
-    trn_acc = trn - prev_trn
-    if trn_acc > TRN_ACC_LIM:
-        trn = prev_trn + TRN_ACC_LIM
-    elif trn_acc < -TRN_ACC_LIM:
-        trn = prev_trn - TRN_ACC_LIM
-
-    prev_fwd = fwd
-    prev_trn = trn
-
-    return fwd, trn
-
-
-def joy_cb(Joy):
-    global ADJ_THROTTLE
-    global MAX_VEL_FWD
-    global MAX_VEL_TURN
-    global MAX_VEL_FLIPPER
-    global DRIVE_THROTTLE
-    global FLIPPER_THROTTLE
-    global DRIVE_INCREMENTS
-    global FLIPPER_INCREMENTS
-    global PREV_CMD_TIME
-    global PREV_SEQ_NUM
-    global DPAD_ACTIVE
-
-    global cmd
-    global seq
-    global last_a_button, last_b_button, last_x_button, last_y_button
-    global last_joycb_device_check
-    global a_button_pub, a_button_msg, b_button_pub, b_button_msg
-    global x_button_pub, x_button_msg, y_button_pub, y_button_msg
-
-    cmd_time = float(Joy.header.stamp.secs) + (float(Joy.header.stamp.nsecs) / 1000000000)
-    rbt_time = time.time()
-    signal_delay = rbt_time - cmd_time
-
-    joy_delay = Float32()
-    joy_delay.data = signal_delay
-    pub_delay.publish(joy_delay)
-
-    # Record timestamp and seq for use in next loop
-    PREV_CMD_TIME = cmd_time
-    PREV_SEQ_NUM = Joy.header.seq
-
-    # check for other two user-defined buttons. We only debounce them and monitor on/off status on a latched pub
-    # (green/A)
-    if A_BUTTON_TOGGLE:
-        if Joy.buttons[A_BUTTON] == 1:
-            if time.time() - last_a_button > MIN_TOGGLE_DUR:
-                last_a_button = time.time()
-                a_button_state = not a_button_msg.data
-                rospy.loginfo('A button toggled: {state}'.format(state=a_button_state))
-                a_button_msg.data = a_button_state
-    else:
-        if Joy.buttons[A_BUTTON] == 1:
-            a_button_msg.data = True
+class XboxMapper:
+    def __init__(self):
+        self.node = rclpy.create_node('xbox_mapper_node')
+        
+        self.cmd = TwistStamped()
+        self.last_a_button = time.time()
+        self.last_b_button = time.time()
+        self.last_x_button = time.time()
+        self.last_y_button = time.time()
+        self.last_joycb_device_check = time.time()
+        self.button_msg = String()
+        
+        # Declare parameters
+        self.node.declare_parameter('driver', 'xboxdrv')
+        self.node.declare_parameter('wired_or_wireless', 'wireless')
+        self.node.declare_parameter('max_vel_drive', 2.6)
+        self.node.declare_parameter('max_vel_turn', 9.0)
+        self.node.declare_parameter('max_vel_flipper', 1.4)
+        self.node.declare_parameter('default_drive_throttle', 0.15)
+        self.node.declare_parameter('default_flipper_throttle', 0.6)
+        self.node.declare_parameter('adjustable_throttle', True)
+        self.node.declare_parameter('a_button_toggle', False)
+        self.node.declare_parameter('b_button_toggle', False)
+        self.node.declare_parameter('x_button_toggle', False)
+        self.node.declare_parameter('y_button_toggle', False)
+        
+        # difference between xboxdrv USB driver and xpad.ko kernel module
+        # 1) xboxdrv has only 11 indices
+        # 2) U/D_PAD_BUTTON is the 7th axis
+        # 3) xpad module uses 2, xboxdrv uses 3
+        self.driver = self.node.get_parameter('driver').value
+        self.wired_or_wireless = self.node.get_parameter('wired_or_wireless').value
+        
+        if self.driver == 'xpad':
+            self.node.get_logger().fatal('[{node_name}] xpad driver not supported.'.format(
+                node_name=self.node.get_name()))
+            rclpy.shutdown()
+            exit(-1)
+        
+        elif self.wired_or_wireless == 'wired' and self.driver == 'xboxdrv':
+            self.node.get_logger().info('XBOX CONFIG: wired & xboxdrv')
+            self.node.get_logger().warn('If the wired controller becomes unplugged during operation '
+                                        'xboxdrv may continue to publish the last command from the '
+                                        'controller, causing the vehicle to run away.')
+        
+        elif self.wired_or_wireless == 'wireless' and self.driver == 'xboxdrv':
+            self.node.get_logger().info('XBOX CONFIG: wireless & xboxdrv')
+        
         else:
-            a_button_msg.data = False
-    a_button_pub.publish(a_button_msg)
+            self.node.get_logger().fatal('Unsupported controller configuration: {driver}, {connection}'.format(
+                driver=self.driver, connection=self.wired_or_wireless))
+            rclpy.shutdown()
+            exit(-1)
+        
+        self.L_STICK_H_AXES = 0
+        self.L_STICK_V_AXES = 1
+        self.L_TRIG_AXES = 2
+        self.R_STICK_H_AXES = 3
+        self.R_STICK_V_AXES = 4
+        self.R_TRIG_AXES = 4
+        self.DPAD_H_AXES = 6
+        self.DPAD_V_AXES = 7
 
-    # (red/B)
-    if B_BUTTON_TOGGLE:
-        if Joy.buttons[B_BUTTON] == 1:
-            if time.time() - last_b_button > MIN_TOGGLE_DUR:
-                last_b_button = time.time()
-                b_button_state = not b_button_msg.data
-                rospy.loginfo('B button toggled: {state}'.format(state=b_button_state))
-                b_button_msg.data = b_button_state
-    else:
-        if Joy.buttons[B_BUTTON] == 1:
-            b_button_msg.data = True
+        self.A_BUTTON = 0
+        self.B_BUTTON = 1
+        self.X_BUTTON = 2
+        self.Y_BUTTON = 3
+        self.LB_BUTTON = 4
+        self.RB_BUTTON = 5
+        self.BACK_BUTTON = 6
+        self.START_BUTTON = 7
+        self.POWER_BUTTON = 8
+        self.L_STICK_BUTTON = 9
+        self.R_STICK_BUTTON = 10
+
+        self.prev_fwd = 0
+        self.prev_trn = 0
+
+        self.PREV_CMD_TIME = 0
+
+        self.MAX_VEL_FWD = self.node.get_parameter('max_vel_drive').value
+        self.MAX_VEL_TURN = self.node.get_parameter('max_vel_turn').value
+        self.MAX_VEL_FLIPPER = self.node.get_parameter('max_vel_flipper').value
+        self.DRIVE_THROTTLE = self.node.get_parameter('default_drive_throttle').value
+        self.FLIPPER_THROTTLE = self.node.get_parameter('default_flipper_throttle').value
+        self.ADJ_THROTTLE = self.node.get_parameter('adjustable_throttle').value
+        self.A_BUTTON_TOGGLE = self.node.get_parameter('a_button_toggle').value
+        self.B_BUTTON_TOGGLE = self.node.get_parameter('b_button_toggle').value
+        self.X_BUTTON_TOGGLE = self.node.get_parameter('x_button_toggle').value
+        self.Y_BUTTON_TOGGLE = self.node.get_parameter('y_button_toggle').value
+        self.MIN_TOGGLE_DUR = 0.5  #
+        self.DRIVE_INCREMENTS = float(20)
+        self.FLIPPER_INCREMENTS = float(20)
+        self.DEADBAND = 0.2
+        self.FWD_ACC_LIM = 0.2
+        self.TRN_ACC_LIM = 0.4
+        self.DPAD_ACTIVE = False
+        
+        self.a_button_msg = Bool()
+        self.a_button_msg.data = False
+        self.b_button_msg = Bool()
+        self.b_button_msg.data = False
+        self.x_button_msg = Bool()
+        self.x_button_msg.data = False
+        self.y_button_msg = Bool()
+        self.y_button_msg.data = False
+        
+        # define publishers
+        self.pub = self.node.create_publisher(TwistStamped, '/cmd_vel/joystick', 1)
+        
+        latching_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL)
+        self.a_button_pub = self.node.create_publisher(Bool, '/joystick/a_button', latching_qos)
+        self.b_button_pub = self.node.create_publisher(Bool, '/joystick/b_button', latching_qos)
+        self.x_button_pub = self.node.create_publisher(Bool, '/joystick/x_button', latching_qos)
+        self.y_button_pub = self.node.create_publisher(Bool, '/joystick/y_button', latching_qos)
+        self.pub_delay = self.node.create_publisher(Float32, '/joystick/delay', 3)
+        self.pub_cancel_move_base = self.node.create_publisher(GoalID, '/move_base/cancel', 10)
+
+        self.sub_cmds = self.node.create_subscription(Joy, 'joystick', self.joy_cb, 10)
+
+    def run(self):
+        self.a_button_pub.publish(self.a_button_msg)
+        self.b_button_pub.publish(self.b_button_msg)
+        self.x_button_pub.publish(self.x_button_msg)
+        self.y_button_pub.publish(self.y_button_msg)
+
+        rclpy.spin(self.node)
+
+    def limit_acc(self, fwd, trn):
+        fwd_acc = fwd - self.prev_fwd
+        if fwd_acc > self.FWD_ACC_LIM:
+            fwd = self.prev_fwd + self.FWD_ACC_LIM
+        elif fwd_acc < -self.FWD_ACC_LIM:
+            fwd = self.prev_fwd - self.FWD_ACC_LIM
+
+        trn_acc = trn - self.prev_trn
+        if trn_acc > self.TRN_ACC_LIM:
+            trn = self.prev_trn + self.TRN_ACC_LIM
+        elif trn_acc < -self.TRN_ACC_LIM:
+            trn = self.prev_trn - self.TRN_ACC_LIM
+
+        self.prev_fwd = fwd
+        self.prev_trn = trn
+
+        return fwd, trn
+    
+    def joy_cb(self, joy_msg):
+        """
+        @type joy_msg: Joy
+        @param joy_msg: Incoming joystick command
+        """
+        cmd_time = float(joy_msg.header.stamp.sec) + (float(joy_msg.header.stamp.nanosec) / 1000000000)
+        rbt_time = time.time()
+        signal_delay = rbt_time - cmd_time
+    
+        joy_delay = Float32()
+        joy_delay.data = signal_delay
+        self.pub_delay.publish(joy_delay)
+    
+        # Record timestamp and seq for use in next loop
+        self.PREV_CMD_TIME = cmd_time
+
+        # check for other two user-defined buttons. We only debounce them and monitor on/off status on a latched pub
+        # (green/A)
+        if self.A_BUTTON_TOGGLE:
+            if joy_msg.buttons[self.A_BUTTON] == 1:
+                if time.time() - self.last_a_button > self.MIN_TOGGLE_DUR:
+                    self.last_a_button = time.time()
+                    a_button_state = not self.a_button_msg.data
+                    self.node.get_logger().info('A button toggled: {state}'.format(state=a_button_state))
+                    self.a_button_msg.data = a_button_state
         else:
-            b_button_msg.data = False
-    b_button_pub.publish(b_button_msg)
-
-    # (blue/X)
-    if X_BUTTON_TOGGLE:
-        if Joy.buttons[X_BUTTON] == 1:
-            if time.time() - last_x_button > MIN_TOGGLE_DUR:
-                last_x_button = time.time()
-                x_button_state = not x_button_msg.data
-                rospy.loginfo('X button toggled: {state}'.format(state=x_button_state))
-                x_button_msg.data = x_button_state
-    else:
-        if Joy.buttons[X_BUTTON] == 1:
-            x_button_msg.data = True
+            if joy_msg.buttons[self.A_BUTTON] == 1:
+                self.a_button_msg.data = True
+            else:
+                self.a_button_msg.data = False
+        self.a_button_pub.publish(self.a_button_msg)
+    
+        # (red/B)
+        if self.B_BUTTON_TOGGLE:
+            if joy_msg.buttons[self.B_BUTTON] == 1:
+                if time.time() - self.last_b_button > self.MIN_TOGGLE_DUR:
+                    self.last_b_button = time.time()
+                    b_button_state = not self.b_button_msg.data
+                    self.node.get_logger().info('B button toggled: {state}'.format(state=b_button_state))
+                    self.b_button_msg.data = b_button_state
         else:
-            x_button_msg.data = False
-    x_button_pub.publish(x_button_msg)
-
-    # (yellow/Y)
-    if Y_BUTTON_TOGGLE:
-        if Joy.buttons[Y_BUTTON] == 1:
-            if time.time() - last_y_button > MIN_TOGGLE_DUR:
-                last_y_button = time.time()
-                y_button_state = not y_button_msg.data
-                rospy.loginfo('Y button toggled: {state}'.format(state=y_button_state))
-                y_button_msg.data = y_button_state
-    else:
-        if Joy.buttons[Y_BUTTON] == 1:
-            y_button_msg.data = True
+            if joy_msg.buttons[self.B_BUTTON] == 1:
+                self.b_button_msg.data = True
+            else:
+                self.b_button_msg.data = False
+        self.b_button_pub.publish(self.b_button_msg)
+    
+        # (blue/X)
+        if self.X_BUTTON_TOGGLE:
+            if joy_msg.buttons[self.X_BUTTON] == 1:
+                if time.time() - self.last_x_button > self.MIN_TOGGLE_DUR:
+                    self.last_x_button = time.time()
+                    x_button_state = not self.x_button_msg.data
+                    self.node.get_logger().info('X button toggled: {state}'.format(state=x_button_state))
+                    self.x_button_msg.data = x_button_state
         else:
-            y_button_msg.data = False
-    y_button_pub.publish(y_button_msg)
-
-    if ADJ_THROTTLE:
-        # Increase/Decrease Max Speed
-        if (driver == 'xpad'):
-            if int(Joy.axes[DPAD_V_AXES]) == 1 and not DPAD_ACTIVE:
-                DRIVE_THROTTLE += (1 / DRIVE_INCREMENTS)
-                DPAD_ACTIVE = True
-            if int(Joy.axes[DPAD_V_AXES]) == -1 and not DPAD_ACTIVE:
-                DRIVE_THROTTLE -= (1 / DRIVE_INCREMENTS)
-                DPAD_ACTIVE = True
-        elif (driver == 'xboxdrv'):
-            if int(Joy.axes[DPAD_V_AXES]) == 1 and not DPAD_ACTIVE:
-                DRIVE_THROTTLE += (1 / DRIVE_INCREMENTS)
-                DPAD_ACTIVE = True
-            if int(Joy.axes[DPAD_V_AXES]) == -1 and not DPAD_ACTIVE:
-                DRIVE_THROTTLE -= (1 / DRIVE_INCREMENTS)
-                DPAD_ACTIVE = True
-
-        if Joy.buttons[LB_BUTTON] == 1:
-            FLIPPER_THROTTLE -= (1 / FLIPPER_INCREMENTS)
-            rospy.loginfo(FLIPPER_THROTTLE)
-        if Joy.buttons[RB_BUTTON] == 1:
-            FLIPPER_THROTTLE += (1 / FLIPPER_INCREMENTS)
-            rospy.loginfo(FLIPPER_THROTTLE)
-
-        # If the user tries to decrease full throttle to 0
-        # Then set it back up to 0.2 m/s
-        if DRIVE_THROTTLE <= 0.001:
-            DRIVE_THROTTLE = (1 / DRIVE_INCREMENTS)
-        if FLIPPER_THROTTLE <= 0.001:
-            FLIPPER_THROTTLE = (1 / FLIPPER_INCREMENTS)
-
-        # If the user tries to increase the velocity limit when its at max
-        # then set velocity limit to max allowed velocity
-        if DRIVE_THROTTLE >= 1:
-            DRIVE_THROTTLE = 1
-        if FLIPPER_THROTTLE >= 1:
-            FLIPPER_THROTTLE = 1
-
-        # Update DEADBAND
-        FWD_DEADBAND = 0.2 * DRIVE_THROTTLE * MAX_VEL_FWD
-        TURN_DEADBAND = 0.2 * DRIVE_THROTTLE * MAX_VEL_TURN
-        FLIPPER_DEADBAND = 0.2 * FLIPPER_THROTTLE * MAX_VEL_FLIPPER
-
-        if DPAD_ACTIVE:
-            rospy.loginfo('Drive Throttle: %f', DRIVE_THROTTLE)
-
-        if (Joy.axes[DPAD_V_AXES], Joy.axes[DPAD_H_AXES]) == (0, 0):
-            DPAD_ACTIVE = False
-
-    # Drive Forward/Backward commands
-    drive_cmd = DRIVE_THROTTLE * MAX_VEL_FWD * Joy.axes[L_STICK_V_AXES]  # left joystick
-    if drive_cmd < FWD_DEADBAND and -FWD_DEADBAND < drive_cmd:
-        drive_cmd = 0
-
-        # Turn left/right commands
-    turn_cmd = (1.1 - (drive_cmd / MAX_VEL_FWD)) * DRIVE_THROTTLE * MAX_VEL_TURN * Joy.axes[
-        R_STICK_H_AXES]  # right joystick
-    if turn_cmd < TURN_DEADBAND and -TURN_DEADBAND < turn_cmd:
-        turn_cmd = 0
-
-    # Flipper up/down commands
-    flipper_cmd = (FLIPPER_THROTTLE * MAX_VEL_FLIPPER * Joy.axes[L_TRIG_AXES]) - (
-            FLIPPER_THROTTLE * MAX_VEL_FLIPPER * Joy.axes[R_TRIG_AXES])
-    if flipper_cmd < FLIPPER_DEADBAND and -FLIPPER_DEADBAND < flipper_cmd:
-        flipper_cmd = 0
-
-    # Limit acceleration
-    # drive_cmd, turn_cmd = limit_acc(drive_cmd, turn_cmd)
-
-    # update the last time joy_cb was called
-    if (drive_cmd != 0) or (turn_cmd != 0):
-        last_joycb_device_check = time.time()
-
-    # Publish move commands
-    cmd.header.seq = seq
-    cmd.header.stamp = rospy.Time.now()
-    cmd.twist.linear.x = drive_cmd
-    cmd.twist.angular.y = flipper_cmd
-    cmd.twist.angular.z = turn_cmd
-    pub.publish(cmd)
-    seq += 1
+            if joy_msg.buttons[self.X_BUTTON] == 1:
+                self.x_button_msg.data = True
+            else:
+                self.x_button_msg.data = False
+        self.x_button_pub.publish(self.x_button_msg)
+    
+        # (yellow/Y)
+        if self.Y_BUTTON_TOGGLE:
+            if joy_msg.buttons[self.Y_BUTTON] == 1:
+                if time.time() - self.last_y_button > self.MIN_TOGGLE_DUR:
+                    self.last_y_button = time.time()
+                    y_button_state = not self.y_button_msg.data
+                    self.node.get_logger().info('Y button toggled: {state}'.format(state=y_button_state))
+                    self.y_button_msg.data = y_button_state
+        else:
+            if joy_msg.buttons[self.Y_BUTTON] == 1:
+                self.y_button_msg.data = True
+            else:
+                self.y_button_msg.data = False
+        self.y_button_pub.publish(self.y_button_msg)
+    
+        if self.ADJ_THROTTLE:
+            # Increase/Decrease Max Speed
+            if self.driver == 'xpad':
+                if int(joy_msg.axes[self.DPAD_V_AXES]) == 1 and not self.DPAD_ACTIVE:
+                    self.DRIVE_THROTTLE += (1. / self.DRIVE_INCREMENTS)
+                    self.DPAD_ACTIVE = True
+                if int(joy_msg.axes[self.DPAD_V_AXES]) == -1 and not self.DPAD_ACTIVE:
+                    self.DRIVE_THROTTLE -= (1. / self.DRIVE_INCREMENTS)
+                    self.DPAD_ACTIVE = True
+            elif self.driver == 'xboxdrv':
+                if int(joy_msg.axes[self.DPAD_V_AXES]) == 1 and not self.DPAD_ACTIVE:
+                    self.DRIVE_THROTTLE += (1. / self.DRIVE_INCREMENTS)
+                    self.DPAD_ACTIVE = True
+                if int(joy_msg.axes[self.DPAD_V_AXES]) == -1 and not self.DPAD_ACTIVE:
+                    self.DRIVE_THROTTLE -= (1. / self.DRIVE_INCREMENTS)
+                    self.DPAD_ACTIVE = True
+    
+            if joy_msg.buttons[self.LB_BUTTON] == 1:
+                self.FLIPPER_THROTTLE -= (1. / self.FLIPPER_INCREMENTS)
+                self.node.get_logger().info("%f" % self.FLIPPER_THROTTLE)
+            if joy_msg.buttons[self.RB_BUTTON] == 1:
+                self.FLIPPER_THROTTLE += (1. / self.FLIPPER_INCREMENTS)
+                self.node.get_logger().info("%f" % self.FLIPPER_THROTTLE)
+    
+            # If the user tries to decrease full throttle to 0
+            # Then set it back up to 0.2 m/s
+            if self.DRIVE_THROTTLE <= 0.001:
+                self.DRIVE_THROTTLE = (1. / self.DRIVE_INCREMENTS)
+            if self.FLIPPER_THROTTLE <= 0.001:
+                self.FLIPPER_THROTTLE = (1. / self.FLIPPER_INCREMENTS)
+    
+            # If the user tries to increase the velocity limit when its at max
+            # then set velocity limit to max allowed velocity
+            if self.DRIVE_THROTTLE >= 1:
+                self.DRIVE_THROTTLE = 1
+            if self.FLIPPER_THROTTLE >= 1:
+                self.FLIPPER_THROTTLE = 1
+    
+            # Update DEADBAND
+            fwd_deadband = 0.2 * self.DRIVE_THROTTLE * self.MAX_VEL_FWD
+            turn_deadband = 0.2 * self.DRIVE_THROTTLE * self.MAX_VEL_TURN
+            flipper_deadband = 0.2 * self.FLIPPER_THROTTLE * self.MAX_VEL_FLIPPER
+    
+            if self.DPAD_ACTIVE:
+                self.node.get_logger().info('Drive Throttle: %f' % self.DRIVE_THROTTLE)
+    
+            if (joy_msg.axes[self.DPAD_V_AXES], joy_msg.axes[self.DPAD_H_AXES]) == (0, 0):
+                self.DPAD_ACTIVE = False
+    
+        # Drive Forward/Backward commands
+        drive_cmd = self.DRIVE_THROTTLE * self.MAX_VEL_FWD * joy_msg.axes[self.L_STICK_V_AXES]  # left joystick
+        if fwd_deadband > drive_cmd > -fwd_deadband:
+            drive_cmd = 0
+    
+            # Turn left/right commands
+        turn_cmd = (1.1 - (drive_cmd / self.MAX_VEL_FWD)) * self.DRIVE_THROTTLE * self.MAX_VEL_TURN * joy_msg.axes[
+            self.R_STICK_H_AXES]  # right joystick
+        if turn_deadband > turn_cmd > -turn_deadband:
+            turn_cmd = 0
+    
+        # Flipper up/down commands
+        flipper_cmd = (self.FLIPPER_THROTTLE * self.MAX_VEL_FLIPPER * joy_msg.axes[self.L_TRIG_AXES]) - (
+                self.FLIPPER_THROTTLE * self.MAX_VEL_FLIPPER * joy_msg.axes[self.R_TRIG_AXES])
+        if flipper_deadband > flipper_cmd > -flipper_deadband:
+            flipper_cmd = 0
+    
+        # Limit acceleration
+        # drive_cmd, turn_cmd = limit_acc(drive_cmd, turn_cmd)
+    
+        # update the last time joy_cb was called
+        if (drive_cmd != 0) or (turn_cmd != 0):
+            self.last_joycb_device_check = time.time()
+    
+        # Publish move commands
+        self.cmd.header.stamp = self.node.get_clock().now().to_msg()
+        self.cmd.twist.linear.x = float(drive_cmd)
+        self.cmd.twist.angular.y = float(flipper_cmd)
+        self.cmd.twist.angular.z = float(turn_cmd)
+        self.pub.publish(self.cmd)
 
 
 # Main Function
 def joystick_main():
-    # Initialize driver node
-    r = rospy.Rate(10)  # 10hz
-    # publish the latched button initializations
-    a_button_pub.publish(a_button_msg)
-    b_button_pub.publish(b_button_msg)
-    x_button_pub.publish(x_button_msg)
-    y_button_pub.publish(y_button_msg)
-
-    while not rospy.is_shutdown():
-        # Subscribe to the joystick topic
-        sub_cmds = rospy.Subscriber('joystick', Joy, joy_cb)
-
-        # spin() simply keeps python from exiting until this node is stopped
-        rospy.spin()
-        r.sleep()
+    rclpy.init(args=sys.argv)
+    mapper = XboxMapper()
+    mapper.run()
 
 
 if __name__ == '__main__':
-    try:
-        joystick_main()
-    except rospy.ROSInterruptException:
-        pass
+    joystick_main()

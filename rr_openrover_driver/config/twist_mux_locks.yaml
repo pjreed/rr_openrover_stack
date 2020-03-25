@@ -8,16 +8,16 @@
 # - priority: priority in the range [0, 255], so all the topics with priority lower than it
 #             will be stopped/disabled
 
-locks:
--
-  name    : navigation
-  topic   : pause_navigation
-  timeout : 0.0
-  # Same priority as keyboard control, so it'll not block it.
-  priority: 90
--
-  name    : joystick
-  topic   : joy_priority
-  timeout : 0.0
-  priority: 100
+twist_mux:
+  ros__parameters:
+    locks:
+      navigation:
+        topic   : pause_navigation
+        timeout : 0.0
+        # Same priority as keyboard control, so it'll not block it.
+        priority: 90
+      joystick:
+        topic   : joy_priority
+        timeout : 0.0
+        priority: 100
 

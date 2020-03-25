@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<package format="2">
+<package format="3">
   <name>rr_openrover_driver</name>
   <version>0.7.4</version>
   <description>
@@ -15,23 +15,23 @@
   <url>http://ros.org/wiki/rr_openrover_driver</url>
   <author>Jack Kilian</author>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>rr_control_input_manager</depend>
+  <depend>rr_openrover_driver_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
 
-  <depend>roscpp</depend>
-  <depend>rospy</depend>
-
-  <build_depend>message_generation</build_depend>
-  <build_depend>rr_openrover_driver_msgs</build_depend>
-  <build_depend>tf2_geometry_msgs</build_depend>
-  <exec_depend>message_runtime</exec_depend>
   <exec_depend>twist_mux</exec_depend>
   <exec_depend>joy</exec_depend>
-  <exec_depend>rr_openrover_driver_msgs</exec_depend>
 
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
 </package>

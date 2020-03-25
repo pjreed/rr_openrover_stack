@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<package format="2">
+<package format="3">
   <name>rr_openrover_stack</name>
   <version>0.7.4</version>
   <description>
@@ -13,12 +13,13 @@
 
   <license>BSD</license>
 
+  <exec_depend>rr_openrover_description</exec_depend>
   <exec_depend>rr_openrover_driver</exec_depend>
   <exec_depend>rr_openrover_driver_msgs</exec_depend>
   <exec_depend>rr_control_input_manager</exec_depend>
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
   <export>
-    <metapackage/>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

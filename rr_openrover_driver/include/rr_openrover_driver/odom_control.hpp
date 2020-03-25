@@ -4,6 +4,8 @@
 #include <vector>
 #include <string>
 
+#include <rclcpp/rclcpp.hpp>
+
 #include "rr_openrover_driver/constants.hpp"
 
 namespace openrover
@@ -11,11 +13,12 @@ namespace openrover
 class OdomControl
 {
 public:
-  OdomControl();  // default
+  explicit OdomControl(rclcpp::Node::SharedPtr node);  // default
 
   OdomControl(bool use_control, PidGains pid_gains, int max, int min,
-              std::ofstream* fs);                                // max min values for returned value
-  OdomControl(bool use_control, PidGains pid_gains, int max, int min);  // max min values for returned value
+              std::ofstream* fs, rclcpp::Node::SharedPtr node); // max min values for returned value
+  OdomControl(bool use_control, PidGains pid_gains, int max, int min,
+              rclcpp::Node::SharedPtr node); // max min values for returned value
 
   unsigned char run(bool e_stop_on, bool control_on, double commanded_vel, double measured_vel,
                     double dt);  // in m/s
@@ -73,6 +76,8 @@ private:
   double D(double error, double dt);
   int PID(double error, double dt);
   int feedThroughControl();
+
+  rclcpp::Node::SharedPtr node_;
 };
 
 }

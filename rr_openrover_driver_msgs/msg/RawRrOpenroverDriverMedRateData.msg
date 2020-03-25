@@ -1,4 +1,4 @@
-Header header
+std_msgs/Header header
 int32 reg_pwr_total_current
 int32 reg_motor_fb_rpm_left
 int32 reg_motor_fb_rpm_right

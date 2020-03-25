@@ -1,69 +1,35 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.10)
 project(rr_control_input_manager)
 
-
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  rospy
-  std_msgs
-)
-
-################################################
-## Declare ROS messages, services and actions ##
-################################################
-
-
-################################################
-## Declare ROS dynamic reconfigure parameters ##
-################################################
-
-
-###################################
-## catkin specific configuration ##
-###################################
-catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES rr_control_input_manager
-#  CATKIN_DEPENDS roscpp rospy std_msgs
-#  DEPENDS system_lib
-)
-
-###########
-## Build ##
-###########
-include_directories(
-# include
-  ${catkin_INCLUDE_DIRS}
-)
-
+find_package(ament_cmake REQUIRED)
 
 #############
 ## Install ##
 #############
 
-catkin_install_python(PROGRAMS scripts/control_input_manager.py scripts/xbox_mapper.py
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
-)
-
-catkin_install_python(PROGRAMS test/test_functional.py test/test_latency.py
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/test
+install(PROGRAMS
+    scripts/control_input_manager.py
+    scripts/xbox_mapper.py
+    test/test_functional.py
+    test/test_latency.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ## Copy launch files
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}/
   FILES_MATCHING PATTERN "*.launch"
 )
 
 ## Copy config files
-install(DIRECTORY config/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}/
   FILES_MATCHING PATTERN "*.yaml"
 )
 
 ## Copy test files
-install(DIRECTORY test/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/test
+install(DIRECTORY test
+  DESTINATION share/${PROJECT_NAME}/
   FILES_MATCHING PATTERN "*.test"
 )
 
@@ -84,3 +50,6 @@ if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   add_rostest(test/control_input_manager.test)
 endif()
+
+ament_export_dependencies(ament_cmake)
+ament_package()

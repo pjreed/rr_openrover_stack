@@ -1,7 +1,7 @@
-#!/usr/bin/env python
-import rospy
+#!/usr/bin/env python3
+import rclpy
 import unittest
-import rosunit
+# import rosunit
 from geometry_msgs.msg import Twist, TwistStamped
 
 PKG = 'rr_control_input_manager'

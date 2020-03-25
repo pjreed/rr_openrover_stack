@@ -1,20 +1,27 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import rospy
+import sys
+import rclpy
 from std_msgs.msg import String, Bool
-from nav_msgs.msg import Odometry
-from rr_openrover_driver_msgs.msg import RawRrOpenroverDriverSlowRateData, RawRrOpenroverDriverMedRateData, SmartBatteryStatus
+from rr_openrover_driver_msgs.msg import RawRrOpenroverDriverSlowRateData, RawRrOpenroverDriverMedRateData,\
+    SmartBatteryStatus
 
 
-class rover_diagnostic():
+class RoverDiagnostic:
 
-    def __init__(self):
-        self.pub = rospy.Publisher('/inorbit/custom_data/0', String, queue_size=5)
-        rospy.Subscriber("/raw_slow_rate_data", RawRrOpenroverDriverSlowRateData, self.slow_data_cb)
-        rospy.Subscriber("/rr_openrover_driver/raw_med_rate_data", RawRrOpenroverDriverMedRateData, self.med_data_cb)
-        rospy.Subscriber("/rr_openrover_driver/battery_status_a", SmartBatteryStatus, self.battery_status_a_cb)
-        rospy.Subscriber("/rr_openrover_driver/battery_status_b", SmartBatteryStatus, self.battery_status_b_cb)
-        rospy.Subscriber('/rr_openrover_driver/charging', Bool, self.openrover_charging_cb)
+    def __init__(self, node):
+        """
+        @type node: rclpy.Node
+        @param node: 
+        """
+        self.node = node
+        self.node.get_logger().warn("InOrbit doesn't work with ROS2 yet!")
+        self.pub = node.create_publisher(String, "/inorbit/custom_data/data0", 5)
+        self.slow_data_sub = node.create_subscription(RawRrOpenroverDriverSlowRateData, "/raw_slow_rate_data", self.slow_data_cb)
+        self.med_data_sub = node.create_subscription(RawRrOpenroverDriverMedRateData, "/rr_openrover_driver/raw_med_rate_data", self.med_data_cb)
+        self.battery_a_sub = node.create_subscription(SmartBatteryStatus, "/rr_openrover_driver/battery_status_a", self.battery_status_a_cb)
+        self.battery_b_sub = node.create_subscription(SmartBatteryStatus, "/rr_openrover_driver/battery_status_b", self.battery_status_b_cb)
+        self.charging_sub = node.create_subscription(Bool, '/rr_openrover_driver/charging', self.openrover_charging_cb)
 
     def slow_data_cb(self, data):
         warn_msg = "Battery Levels [" + str(data.reg_robot_rel_soc_a) + ", " + str(
@@ -53,14 +60,15 @@ class rover_diagnostic():
             if k != 'header':
                 self.pub.publish("Battery Status B." + k + '=' + str(int(getattr(msg, k))))
 
-
     def openrover_charging_cb(self, msg):
         self.pub.publish("Open Rover Charging=" + str(msg.data))
 
 
 if __name__ == '__main__':
-    rospy.loginfo("Starting node")
-    rospy.init_node('openrover_diagnostics_node')
-
-    my_diagnostic = rover_diagnostic()
-    rospy.spin()
+    rclpy.init(args=sys.argv)
+    node = rclpy.create_node("openrover_diagnostics_node")
+    node.get_logger().info("Starting node")
+    
+    my_diagnostic = RoverDiagnostic(node)
+    
+    rclpy.spin(node)

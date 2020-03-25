@@ -1,4 +1,4 @@
-Header header
+std_msgs/Header header
 
 bool over_charged_alarm
 bool terminate_charge_alarm
